@@ -1,32 +1,79 @@
-export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: '只允许POST' })
+// api/generate.js
+module.exports = async (req, res) => {
+  // 1. 允许跨域，适配小程序
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
   }
 
-  const API_KEY = '9ecb9cc0-2834-473f-93ce-5d421614185c'
-  const API_URL = 'https://ark.cn-beijing.volces.com/api/v3/videos/generations'
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
+
+  const { prompt, audio_url } = req.body;
+
+  if (!prompt) {
+    return res.status(400).json({ error: '缺少推文内容' });
+  }
 
   try {
-    const { prompt } = req.body
+    // 2. 从 Vercel 环境变量读取你的豆包 API Key
+    const apiKey = process.env.DOUBAO_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({ error: '未配置 DOUBAO_API_KEY 环境变量' });
+    }
 
-    const resp = await fetch(API_URL, {
+    // 3. 调用火山引擎（豆包）视频生成接口
+    const endpoint = 'https://ark.cn-beijing.volces.com/api/v3';
+    const model = 'doubao-video-1.0'; // 视频生成模型
+
+    const response = await fetch(`${endpoint}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${API_KEY}`
+        'Authorization': `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: "doubao-seedance-1-0-pro",
-        prompt: "日系动漫风格，" + prompt,
-        duration: 5,
-        ratio: "9:16"
+        model: model,
+        messages: [
+          {
+            role: 'user',
+            content: `根据以下推文生成日系动漫视频：${prompt}，背景音乐：${audio_url || '默认音乐'}`
+          }
+        ]
       })
-    })
+    });
 
-    const data = await resp.json()
-    res.status(200).json(data)
+    const data = await response.json();
 
-  } catch (e) {
-    res.status(500).json({ error: e.message })
+    if (!response.ok) {
+      throw new Error(data.error?.message || '豆包API调用失败');
+    }
+
+    // 4. 从返回结果中提取视频地址
+    const videoUrl = data.video_url || data.data?.video_url;
+
+    if (!videoUrl) {
+      return res.status(500).json({ error: '豆包API未返回视频地址' });
+    }
+
+    // 5. 返回给小程序
+    return res.status(200).json({
+      code: 200,
+      data: {
+        video_url: videoUrl,
+        prompt: prompt
+      }
+    });
+
+  } catch (error) {
+    console.error('生成失败:', error);
+    return res.status(500).json({
+      error: '生成失败',
+      details: error.message
+    });
   }
-}
+};
